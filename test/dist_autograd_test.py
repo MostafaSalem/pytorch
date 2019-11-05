@@ -28,6 +28,7 @@ known_context_ids = []
 # we don't need a lock here since the GIL is held while executing remote
 # python UDFs, so access is serialized across several workers.
 def _set_rpc_done(ctx_id, rank_distance):
+    print(ctx_id, "=== setting rpc done for rank dist ", rank_distance)
     global rpc_done
     global ctx_ids
     global known_context_ids
@@ -107,9 +108,14 @@ def _all_contexts_cleaned_up(timeout_seconds=10):
 # This function creates a dis atugorad context, run rpc_sync on the given ps,
 # and then blocks until the ps has verified the grads are correctly accumulated.
 def _run_trainer(rref_t1, t2, ps, rank_diff):
+    print("11111111111")
     with dist_autograd.context() as context_id:
+        print("ps=", ps, "rank diff = ", rank_diff, " got autograd context")
+
         ret = rpc.rpc_sync(ps, my_rref_add, args=(rref_t1, t2))
+        print("ps=", ps, "rank diff = ", rank_diff, " done with rpc_sync")
         dist_autograd.backward([ret.sum()])
+        print("ps=", ps, "rank diff = ", rank_diff, " done with backward")
         # prevent deleting dist autograd context
         rpc.rpc_sync(ps, _set_rpc_done, args=(context_id, rank_diff))
         rpc.rpc_sync(ps, _check_rpc_done, args=(0, ))
@@ -166,6 +172,7 @@ class DistAutogradTest(object):
         return self.dst_rank
 
     def _check_rpc_done(self, rank_distance):
+        print("--- ", self.rank, " checking rpc done ")
         _check_rpc_done(rank_distance)
 
     @property
@@ -375,7 +382,6 @@ class DistAutogradTest(object):
     def test_graph_for_python_call(self):
         self._test_graph(my_py_add, ExecMode.RPC_SYNC)
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_graph_for_builtin_remote_call(self):
         self._test_graph(torch.add, ExecMode.REMOTE)
@@ -466,7 +472,6 @@ class DistAutogradTest(object):
     def test_graph_for_py_nested_call(self):
         self._test_graph_for_py_nested_call(ExecMode.RPC_SYNC)
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_graph_for_py_nested_remote_call(self):
         self._test_graph_for_py_nested_call(ExecMode.REMOTE)
@@ -548,7 +553,6 @@ class DistAutogradTest(object):
     def test_graph_for_py_nested_call_itself(self):
         self._test_graph_for_py_nested_call_itself(ExecMode.RPC_SYNC)
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_graph_for_py_nested_remote_call_itself(self):
         self._test_graph_for_py_nested_call_itself(ExecMode.REMOTE)
@@ -599,7 +603,6 @@ class DistAutogradTest(object):
     def test_no_graph_with_tensors_not_require_grad(self):
         self._test_no_graph_with_tensors_not_require_grad(ExecMode.RPC_SYNC)
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_no_graph_with_tensors_not_require_grad_remote(self):
         self._test_no_graph_with_tensors_not_require_grad(ExecMode.REMOTE)
@@ -653,7 +656,6 @@ class DistAutogradTest(object):
     def test_rpc_complex_args(self):
         self._test_rpc_complex_args(ExecMode.RPC_SYNC)
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_remote_complex_args(self):
         self._test_rpc_complex_args(ExecMode.REMOTE)
@@ -828,14 +830,12 @@ class DistAutogradTest(object):
                 )
             )
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_backward_rref(self):
         callee = "worker{}".format(self._next_rank())
         rref_owner = callee
         self._test_backward_rref(callee, rref_owner)
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_backward_rref_multi(self):
         if self.rank > 0:
@@ -843,7 +843,6 @@ class DistAutogradTest(object):
             rref_owner = callee
             self._test_backward_rref(callee, rref_owner)
 
-    @unittest.skip("Test is flaky, see https://github.com/pytorch/pytorch/issues/28885")
     @dist_init
     def test_backward_rref_nested(self):
         callee = "worker{}".format((self.rank + 1) % self.world_size)
@@ -877,6 +876,8 @@ class DistAutogradTest(object):
             args=(self_name, (3, 3))
         )
 
+        print("rank", self.rank, " created rref_t1")
+
         # kick off forward and backward pass on three other workers (trainers)
         rank_diffs = [1, 2, 3]
         futures = []
@@ -889,7 +890,9 @@ class DistAutogradTest(object):
 
         # check if the trainers have done with their backward pass
         for rank_diff in rank_diffs:
+            print("rank", self.rank, " checking ", rank_diff)
             self._check_rpc_done(rank_diff)
+        print("rank", self.rank, " checked rpc done")
 
         # trainers are done and holding the context for verification
         accumulate_grad_func = None
@@ -901,6 +904,7 @@ class DistAutogradTest(object):
             local_t1 = rref_t1.local_value().wait()
             self.assertIn(local_t1, grads)
             self.assertEqual(grads[local_t1], t1.grad)
+            print("rank", self.rank, " assert passed for ", rank_diff)
 
         # unblock trainers
         _set_rpc_done(None, 0)
